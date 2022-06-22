@@ -5,14 +5,9 @@
   "type": "module",
   "main": "./dist/size-plugin.cjs",
   "module": "./src/index.js",
-  "exports": {
-    "require": "./dist/size-plugin.cjs",
-    "default": "./src/index.js"
-  },
-  "types": "./dist/size-plugin.d.ts",
   "scripts": {
     "build": "microbundle -f cjs --target node --no-compress --no-sourcemap src/index.js",
-    "postbuild": "cd dist && mv index.d.ts size-plugin.d.ts && mv size-plugin.cjs.js size-plugin.cjs",
+    "postbuild": "cd dist",
     "doc": "documentation readme src/index.mjs -a public --section Options",
     "prepare": "npm run -s build",
     "test": "jest --coverage --colors",

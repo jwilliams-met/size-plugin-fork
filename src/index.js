@@ -30,12 +30,12 @@ const glob = promisify(globPromise);
 const NAME = 'SizePlugin';
 
 const GZIP_OPTS = {
-	level: 9
+	level: 9,
 };
 const BROTLI_OPTS = {
 	params: {
-		[zlib.constants.BROTLI_PARAM_QUALITY]: zlib.constants.BROTLI_MAX_QUALITY
-	}
+		[zlib.constants.BROTLI_PARAM_QUALITY]: zlib.constants.BROTLI_MAX_QUALITY,
+	},
 };
 
 /**
@@ -49,6 +49,7 @@ const BROTLI_OPTS = {
  * @param {function} [options.stripHash] custom function to remove/normalize hashed filenames for comparison
  * @param {'none' | 'gzip' | 'brotli'} [options.compression = 'gzip'] change the compression algorithm used for calculated sizes
  * @param {string} [options.mode] custom Webpack "mode" - only use this to emulate "mode" in Webpack 3.
+ * @param {string} [options.header] custom header for filesizes.
  * @param {(item:Item)=>string?} [options.decorateItem] custom function to decorate items
  * @param {(data:Data)=>string?} [options.decorateAfter] custom function to decorate all output
  * @public
@@ -62,6 +63,7 @@ export default class SizePlugin {
 		this.options.filename = this.options.filename || 'size-plugin.json';
 		this.options.writeFile = this.options.writeFile !== false;
 		this.filename = path.join(process.cwd(), this.options.filename);
+		this.header = this.options.header;
 	}
 
 	reverseTemplate(filename, template) {
@@ -69,8 +71,8 @@ export default class SizePlugin {
 		if (typeof template === 'function') {
 			template = template({
 				chunk: {
-					name: 'main'
-				}
+					name: 'main',
+				},
 			});
 		}
 		const hashLength = this.output.hashDigestLength;
@@ -86,26 +88,22 @@ export default class SizePlugin {
 			}
 			return out;
 		}
-		const reg = template.replace(
-			/(^|.+?)(?:\[([a-z]+)(?::(\d))?\]|$)/g,
-			(s, before, type, size) => {
-				let out = '';
-				if (before) {
-					out += `(${escapeRegExp(before)})`;
-					replace[count++] = false;
-				}
-				if (type === 'hash' || type === 'contenthash' || type === 'chunkhash') {
-					const len = Math.round(size) || hashLength;
-					out += `([0-9a-zA-Z]{${len}})`;
-					replace[count++] = true;
-				}
-				else if (type) {
-					out += '(.*?)';
-					replace[count++] = false;
-				}
-				return out;
+		const reg = template.replace(/(^|.+?)(?:\[([a-z]+)(?::(\d))?\]|$)/g, (s, before, type, size) => {
+			let out = '';
+			if (before) {
+				out += `(${escapeRegExp(before)})`;
+				replace[count++] = false;
 			}
-		);
+			if (type === 'hash' || type === 'contenthash' || type === 'chunkhash') {
+				const len = Math.round(size) || hashLength;
+				out += `([0-9a-zA-Z]{${len}})`;
+				replace[count++] = true;
+			} else if (type) {
+				out += '(.*?)';
+				replace[count++] = false;
+			}
+			return out;
+		});
 		const matcher = new RegExp(`^${reg}$`);
 		return matcher.test(filename) && filename.replace(matcher, replacer);
 	}
@@ -122,16 +120,12 @@ export default class SizePlugin {
 		try {
 			const oldStats = await fs.readJSON(filename);
 			return oldStats.sort((a, b) => b.timestamp - a.timestamp);
-		}
-		catch (err) {
+		} catch (err) {
 			return [];
 		}
 	}
 	async writeToDisk(filename, stats) {
-		if (
-			this.mode === 'production' &&
-			stats.files.some(file => file.diff !== 0)
-		) {
+		if (this.mode === 'production' && stats.files.some((file) => file.diff !== 0)) {
 			const data = await this.readFromDisk(filename);
 			data.unshift(stats);
 			if (this.options.writeFile) {
@@ -144,12 +138,13 @@ export default class SizePlugin {
 	async save(files) {
 		const stats = {
 			timestamp: Date.now(),
-			files: files.map(file => ({
+			version: this.header,
+			files: files.map((file) => ({
 				filename: file.name,
 				previous: file.sizeBefore,
 				size: file.size,
-				diff: file.size - file.sizeBefore
-			}))
+				diff: file.size - file.sizeBefore,
+			})),
 		};
 		this.options.publish && (await publishDiff(stats, this.options.filename));
 		this.options.save && (await this.options.save(stats));
@@ -173,7 +168,7 @@ export default class SizePlugin {
 
 		const done = (stats, callback) => {
 			this.outputSizes(stats.compilation.assets)
-				.then(output => {
+				.then((output) => {
 					if (output) console.log('\n' + output);
 				})
 				.catch(console.error)
@@ -183,8 +178,7 @@ export default class SizePlugin {
 		// for webpack version > 4
 		if (compiler.hooks && compiler.hooks.done) {
 			compiler.hooks.done.tapAsync(NAME, done);
-		}
-		else {
+		} else {
 			// for webpack version < 3
 			compiler.plugin('done', done);
 		}
@@ -195,29 +189,20 @@ export default class SizePlugin {
 		// Fix #7 - fast-async doesn't allow non-promise values.
 		const sizesBefore = await Promise.resolve(this.sizes);
 		const isMatched = minimatch.filter(this.pattern);
-		const isExcluded = this.exclude
-			? minimatch.filter(this.exclude)
-			: () => false;
-		const assetNames = Object.keys(assets).filter(
-			file => isMatched(file) && !isExcluded(file)
-		);
-		const sizes = await Promise.all(
-			assetNames.map(name => this.getCompressedSize(assets[name].source()))
-		);
+		const isExcluded = this.exclude ? minimatch.filter(this.exclude) : () => false;
+		const assetNames = Object.keys(assets).filter((file) => isMatched(file) && !isExcluded(file));
+		const sizes = await Promise.all(assetNames.map((name) => this.getCompressedSize(assets[name].source())));
 
 		// map of de-hashed filenames to their final size
 		this.sizes = toMap(
-			assetNames.map(filename => this.stripHash(filename)),
-			sizes
+			assetNames.map((filename) => this.stripHash(filename)),
+			sizes,
 		);
 
 		// get a list of unique filenames
-		const files = [
-			...Object.keys(sizesBefore),
-			...Object.keys(this.sizes)
-		].filter(dedupe);
+		const files = [...Object.keys(sizesBefore), ...Object.keys(this.sizes)].filter(dedupe);
 
-		const width = Math.max(...files.map(file => file.length));
+		const width = Math.max(...files.map((file) => file.length));
 		let output = '';
 		const items = [];
 		for (const name of files) {
@@ -225,14 +210,7 @@ export default class SizePlugin {
 			const sizeBefore = sizesBefore[name] || 0;
 			const delta = size - sizeBefore;
 			const msg = new Array(width - name.length + 2).join(' ') + name + ' ⏤  ';
-			const color =
-				size > 100 * 1024
-					? 'red'
-					: size > 40 * 1024
-						? 'yellow'
-						: size > 20 * 1024
-							? 'cyan'
-							: 'green';
+			const color = size > 100 * 1024 ? 'red' : size > 40 * 1024 ? 'yellow' : size > 20 * 1024 ? 'cyan' : 'green';
 			let sizeText = chalk[color](prettyBytes(size));
 			let deltaText = '';
 			if (delta && Math.abs(delta) > 1) {
@@ -240,8 +218,7 @@ export default class SizePlugin {
 				if (delta > 1024) {
 					sizeText = chalk.bold(sizeText);
 					deltaText = chalk.red(deltaText);
-				}
-				else if (delta < -10) {
+				} else if (delta < -10) {
 					deltaText = chalk.green(deltaText);
 				}
 				sizeText += ` (${deltaText})`;
@@ -255,7 +232,7 @@ export default class SizePlugin {
 				delta,
 				deltaText,
 				msg,
-				color
+				color,
 			};
 			items.push(item);
 			if (this.options.decorateItem) {
@@ -267,7 +244,7 @@ export default class SizePlugin {
 			const opts = {
 				sizes: items,
 				raw: { sizesBefore, sizes: this.sizes },
-				output
+				output,
 			};
 			const text = this.options.decorateAfter(opts);
 			if (text) {
@@ -282,14 +259,17 @@ export default class SizePlugin {
 		const files = await glob(this.pattern, { cwd, ignore: this.exclude });
 
 		const sizes = await Promise.all(
-			files.map(async file => {
+			files.map(async (file) => {
 				const source = await fs.promises.readFile(path.join(cwd, file)).catch(() => null);
 				if (source == null) return null;
 				return this.getCompressedSize(source);
-			})
+			}),
 		);
 
-		return toMap(files.map(filename => this.stripHash(filename)), sizes);
+		return toMap(
+			files.map((filename) => this.stripHash(filename)),
+			sizes,
+		);
 	}
 
 	async getCompressedSize(source) {
@@ -297,8 +277,7 @@ export default class SizePlugin {
 		if (this.compression === 'gzip') {
 			const gz = promisify(zlib.gzip);
 			compressed = await gz(source, GZIP_OPTS);
-		}
-		else if (this.compression === 'brotli') {
+		} else if (this.compression === 'brotli') {
 			if (!zlib.brotliCompress) throw Error('Brotli not supported in this Node version.');
 			const br = promisify(zlib.brotliCompress);
 			compressed = await br(source, BROTLI_OPTS);
@@ -306,7 +285,6 @@ export default class SizePlugin {
 		return Buffer.byteLength(compressed);
 	}
 }
-
 
 /**
  * @name Item
@@ -321,7 +299,6 @@ export default class SizePlugin {
  * @property {string} color The item's default CLI color
  * @public
  */
-
 
 /**
  * @name Data
